@@ -8,7 +8,7 @@ app.use(cors());
 
 app.get('/kijiji-listing', async (req, res) => {
   try {
-    const url = 'https://kijiji-scraper.onrender.com/kijiji-listing';
+    const url = 'https://www.kijiji.ca/v-apartments-condos/mississauga-peel-region/620-martin-grove-rd-one-bedroom-penthouse-for-rent-in-martin-g/1708210015';
     const response = await axios.get(url);
     const $ = cheerio.load(response.data);
 
