@@ -1,91 +1,53 @@
-const express = require("express");
-const axios = require("axios");
-const cheerio = require("cheerio");
-const cors = require("cors");
-
+const puppeteer = require('puppeteer');
+const Tesseract = require('tesseract.js');
+const express = require('express');
+const cors = require('cors');
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-app.post("/kijiji-listing", async (req, res) => {
+app.post('/kijiji-ocr', async (req, res) => {
   const { url } = req.body;
-
-  if (!url || !url.includes("kijiji.ca")) {
-    return res.status(400).json({ error: "Invalid or missing Kijiji URL" });
-  }
+  if (!url) return res.status(400).json({ error: 'Missing URL' });
 
   try {
-    const response = await axios.get(url);
-    const $ = cheerio.load(response.data);
+    const browser = await puppeteer.launch({ headless: 'new' });
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle0' });
 
-    const title = $("h1").first().text().trim();
-    const priceRaw = $("h3:contains('$')").first().text().trim();
-    const price = parseFloat(priceRaw.replace(/[^0-9.]/g, "")) || null;
+    const screenshotPath = 'kijiji.png';
+    await page.screenshot({ path: screenshotPath, fullPage: true });
 
-    const address = $('a[href*="google.com/maps"]').first().text().trim();
+    await browser.close();
 
-    // Extract label-value divs (left side icons: bed, bath, parking, pets)
-    const gridItems = {};
-    $('div[class*="sc-"][class*="jvYcY"]').each((i, el) => {
-      const text = $(el).text().trim().toLowerCase();
-      if (text.includes("bedroom")) gridItems.bedrooms = text;
-      if (text.includes("bathroom")) gridItems.bathrooms = text;
-      if (text.includes("parking")) gridItems.parking_included = text;
-      if (text.includes("pets")) gridItems.pets_allowed = text;
-      if (text.includes("apartment")) gridItems.apartment_type = "Apartment";
-      if (text.includes("townhome")) gridItems.apartment_type = "Townhome";
+    // OCR
+    const result = await Tesseract.recognize(screenshotPath, 'eng', {
+      logger: m => console.log(m),
     });
 
-    // Extract rental agreement, furnished, smoking from attribute list
-    const attributes = {};
-    $('[data-testid="listing-attributes"] li').each((_, el) => {
-      const label = $(el).find("p").eq(0).text().trim().toLowerCase();
-      const value = $(el).find("p").eq(1).text().trim();
-      if (label && value) {
-        attributes[label] = value;
-      }
-    });
+    const rawText = result.data.text;
+    console.log("OCR result:", rawText);
 
-    // Extract appliances from right-hand list under "Appliances"
-    const appliances = [];
-    $("div:contains('Appliances')")
-      .next()
-      .find("li")
-      .each((_, el) => {
-        appliances.push($(el).text().trim());
-      });
-
-    // Optional: grab all feature bullets under "Apartment Features"
-    const descriptionFeatures = [];
-    $("section:contains('Apartment Features')")
-      .find("li")
-      .each((_, el) => {
-        descriptionFeatures.push($(el).text().trim());
-      });
-
+    // Parse values
     const data = {
-      title: title || null,
-      address: address || null,
-      price: price || null,
-      bedrooms: gridItems.bedrooms || null,
-      bathrooms: gridItems.bathrooms || null,
-      parking_included: gridItems.parking_included || null,
-      apartment_type: gridItems.apartment_type || null,
-      furnished: attributes["furnished"] || null,
-      rental_agreement: attributes["rental agreement"] || null,
-      pets_allowed: gridItems.pets_allowed || attributes["pets"] || null,
-      smoking: attributes["smoking"] || null,
-      appliances,
-      apartment_features: descriptionFeatures
+      title: rawText.match(/^[^\n$]+/)?.[0] || null,
+      price: rawText.match(/\$\d{1,3}(,\d{3})*(\.\d{2})?/)?.[0] || null,
+      bedrooms: rawText.match(/\d+\s+Bedrooms?/)?.[0] || null,
+      bathrooms: rawText.match(/\d+\s+Bathrooms?/)?.[0] || null,
+      furnished: rawText.match(/Furnished\s*(Yes|No)/i)?.[0] || null,
+      pets_allowed: rawText.match(/(Pets|Limited Pets)/i)?.[0] || null,
+      parking: rawText.match(/\d+\s+Parking/)?.[0] || null,
+      rental_agreement: rawText.match(/Rental agreement\s+.+/)?.[0] || null,
     };
 
-    res.json(data);
+    res.json({ extracted: data });
   } catch (err) {
-    console.error("Scraper error:", err.message);
-    res.status(500).json({ error: "Scraping failed", detail: err.message });
+    console.error("OCR error:", err);
+    res.status(500).json({ error: "Failed to scrape via OCR", details: err.message });
   }
 });
 
-const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log("🔥 Scraper running on port " + listener.address().port);
+app.listen(3000, () => {
+  console.log("✅ OCR scraper running on port 3000");
 });
