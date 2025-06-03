@@ -1,16 +1,29 @@
 {
   "name": "kijiji-scraper",
   "version": "1.0.0",
+  "description": "A dynamic Kijiji listing scraper using Puppeteer and Express",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "axios": "^1.5.0",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "puppeteer": "^24.9.0",
-    "tesseract.js": "^6.0.1"
-  }
+    "puppeteer": "^24.9.0"
+  },
+  "keywords": [
+    "puppeteer",
+    "kijiji",
+    "scraper",
+    "ocr",
+    "express",
+    "render"
+  ],
+  "author": "You",
+  "license": "MIT"
 }

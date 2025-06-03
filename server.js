@@ -1,51 +1,74 @@
 const puppeteer = require('puppeteer');
-const Tesseract = require('tesseract.js');
 const express = require('express');
 const cors = require('cors');
-const app = express();
 
+const app = express();
 app.use(cors());
 app.use(express.json());
 
 app.post('/kijiji-ocr', async (req, res) => {
   const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'Missing URL' });
+
+  if (!url || !url.includes('kijiji.ca')) {
+    return res.status(400).json({ error: 'Missing or invalid Kijiji URL' });
+  }
 
   try {
-    const browser = await puppeteer.launch({ headless: 'new' });
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
     const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    await page.setViewport({ width: 1200, height: 900 });
 
-    const screenshotPath = 'kijiji.png';
-    await page.screenshot({ path: screenshotPath, fullPage: true });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Extract data using selectors instead of OCR where possible
-    const listingData = await page.evaluate(() => {
-      const extractText = (selector) => document.querySelector(selector)?.innerText || null;
-      const extractHref = (selector) => document.querySelector(selector)?.href || null;
+    const data = await page.evaluate(() => {
+      try {
+        const getText = (selector) =>
+          document.querySelector(selector)?.innerText.trim() || null;
 
-      return {
-        title: extractText('h1'),
-        price: extractText('[data-testid="listing-price"]') || extractText('h3'),
-        bedrooms: extractText('[data-testid="bedrooms"]'),
-        bathrooms: extractText('[data-testid="bathrooms"]'),
-        address: extractText('a[href*="Tara-Drive"]'),
-        availableDate: extractText('div:contains("Available")'),
-        phoneNumber: extractText('a[href^="tel:"]'),
-        adId: extractText('div:contains("Ad ID")')?.replace('Ad ID', '').trim(),
-        postedBy: extractText('div:contains("On Kijiji since")')?.split('\n')[0]
-      };
+        const findByText = (keyword) =>
+          Array.from(document.querySelectorAll('div'))
+            .map((el) => el.innerText)
+            .find((text) => text?.toLowerCase().includes(keyword)) || null;
+
+        const findListItem = (keyword) =>
+          Array.from(document.querySelectorAll('li'))
+            .map((el) => el.innerText)
+            .find((text) => text?.toLowerCase().includes(keyword)) || null;
+
+        return {
+          title: getText('h1'),
+          price: getText('[data-testid="listing-price"]') || getText('h3'),
+          bedrooms: findByText('bedroom'),
+          bathrooms: findByText('bathroom'),
+          parking: findByText('parking'),
+          furnished: findListItem('furnished'),
+          pets_allowed: findByText('pets'),
+          rental_agreement: findListItem('rental agreement')
+        };
+      } catch (e) {
+        return { error: 'page.evaluate failed', details: e.message };
+      }
     });
 
     await browser.close();
 
-    res.json({ extracted: listingData });
+    console.log("✅ Extracted listing:", data);
+
+    if (data.error) {
+      return res.status(500).json({ error: "Scraping logic failed", details: data.details });
+    }
+
+    res.json({ extracted: data });
   } catch (err) {
-    console.error("Scraping error:", err);
+    console.error("❌ Scraping error:", err);
     res.status(500).json({ error: "Failed to scrape listing", details: err.message });
   }
 });
 
 app.listen(3000, () => {
-  console.log("✅ Kijiji scraper running on port 3000");
+  console.log("🚀 Kijiji scraper running on port 3000");
 });
