@@ -1,3 +1,4 @@
+// server.js
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
@@ -17,13 +18,14 @@ app.post('/kijiji-listing', async (req, res) => {
   try {
     const response = await axios.get(url);
     const $ = cheerio.load(response.data);
+    const rawText = $.text();
 
     const title = $('h1').text().trim();
     const address = $('a[href*="mapAddress"]').text().trim() || $('span[itemprop="streetAddress"]').text().trim();
     const priceRaw = $('[data-testid="listing-price"]').text().trim();
     const price = parseFloat(priceRaw.replace(/[^0-9.]/g, ''));
 
-    // Dynamic Info Mapping
+    // Info map extraction
     const infoMap = {};
     $('[data-testid="attribute-label"]').each((i, el) => {
       const label = $(el).text().trim();
@@ -33,10 +35,27 @@ app.post('/kijiji-listing', async (req, res) => {
       }
     });
 
+    // Appliances list
     const appliances = [];
     $('[data-testid="amenities-list"] li').each((i, el) => {
       appliances.push($(el).text().trim());
     });
+
+    // Enhanced fields
+    const sqftMatch = rawText.match(/([\d,]+)\s*(sq\s?ft|square feet|sqft)/i);
+    const approximateSqFt = sqftMatch ? parseInt(sqftMatch[1].replace(/,/g, '')) : null;
+
+    const dateMatch = rawText.match(/Available\s+(?:from\s+)?(?:on\s+)?([A-Za-z]+\s+\d{1,2},\s+\d{4})/i);
+    const availableDate = dateMatch ? new Date(dateMatch[1]).toISOString().split('T')[0] : null;
+
+    const adIdMatch = rawText.match(/Ad ID\s*(\d{9,})/i);
+    const adId = adIdMatch ? adIdMatch[1] : null;
+
+    const parkingMatch = rawText.match(/(\d+)\s+Parking Included/i);
+    const parkingIncluded = parkingMatch ? parseInt(parkingMatch[1]) : null;
+
+    let unitType = null;
+    if (/apartment|duplex/i.test(title)) unitType = "Multi Unit - Above Ground";
 
     const data = {
       title: title || null,
@@ -46,11 +65,13 @@ app.post('/kijiji-listing', async (req, res) => {
       bathrooms: infoMap['bathrooms'] || null,
       apartment_type: infoMap['apartment type'] || null,
       furnished: infoMap['furnished']?.toLowerCase() === 'yes',
-      parking_included: infoMap['parking included'] || "Not Available",
-      pets_allowed: infoMap['pets'] || null,
+      parking_included: parkingIncluded,
       rental_agreement: infoMap['rental agreement'] || null,
-      smoking: infoMap['smoking'] || null,
-      appliances: appliances,
+      appliances,
+      available_date: availableDate,
+      square_footage: approximateSqFt,
+      ad_id: adId,
+      unit_type: unitType
     };
 
     res.json(data);
