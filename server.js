@@ -1,74 +1,65 @@
-const puppeteer = require('puppeteer');
 const express = require('express');
+const axios = require('axios');
+const cheerio = require('cheerio');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.post('/kijiji-ocr', async (req, res) => {
+app.post('/kijiji-listing', async (req, res) => {
   const { url } = req.body;
 
   if (!url || !url.includes('kijiji.ca')) {
-    return res.status(400).json({ error: 'Missing or invalid Kijiji URL' });
+    return res.status(400).json({ error: 'Invalid or missing Kijiji URL' });
   }
 
   try {
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    const response = await axios.get(url);
+    const $ = cheerio.load(response.data);
 
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1200, height: 900 });
+    const title = $('h1').text().trim();
+    const address = $('a[href*="mapAddress"]').text().trim() || $('span[itemprop="streetAddress"]').text().trim();
+    const priceRaw = $('[data-testid="listing-price"]').text().trim();
+    const price = parseFloat(priceRaw.replace(/[^0-9.]/g, ''));
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-
-    const data = await page.evaluate(() => {
-      try {
-        const getText = (selector) =>
-          document.querySelector(selector)?.innerText.trim() || null;
-
-        const findByText = (keyword) =>
-          Array.from(document.querySelectorAll('div'))
-            .map((el) => el.innerText)
-            .find((text) => text?.toLowerCase().includes(keyword)) || null;
-
-        const findListItem = (keyword) =>
-          Array.from(document.querySelectorAll('li'))
-            .map((el) => el.innerText)
-            .find((text) => text?.toLowerCase().includes(keyword)) || null;
-
-        return {
-          title: getText('h1'),
-          price: getText('[data-testid="listing-price"]') || getText('h3'),
-          bedrooms: findByText('bedroom'),
-          bathrooms: findByText('bathroom'),
-          parking: findByText('parking'),
-          furnished: findListItem('furnished'),
-          pets_allowed: findByText('pets'),
-          rental_agreement: findListItem('rental agreement')
-        };
-      } catch (e) {
-        return { error: 'page.evaluate failed', details: e.message };
+    // Dynamic Info Mapping
+    const infoMap = {};
+    $('[data-testid="attribute-label"]').each((i, el) => {
+      const label = $(el).text().trim();
+      const value = $(el).next('[data-testid="attribute-value"]').text().trim();
+      if (label && value) {
+        infoMap[label.toLowerCase()] = value;
       }
     });
 
-    await browser.close();
+    const appliances = [];
+    $('[data-testid="amenities-list"] li').each((i, el) => {
+      appliances.push($(el).text().trim());
+    });
 
-    console.log("✅ Extracted listing:", data);
+    const data = {
+      title: title || null,
+      address: address || null,
+      price: isNaN(price) ? null : price,
+      bedrooms: infoMap['bedrooms'] || null,
+      bathrooms: infoMap['bathrooms'] || null,
+      apartment_type: infoMap['apartment type'] || null,
+      furnished: infoMap['furnished']?.toLowerCase() === 'yes',
+      parking_included: infoMap['parking included'] || "Not Available",
+      pets_allowed: infoMap['pets'] || null,
+      rental_agreement: infoMap['rental agreement'] || null,
+      smoking: infoMap['smoking'] || null,
+      appliances: appliances,
+    };
 
-    if (data.error) {
-      return res.status(500).json({ error: "Scraping logic failed", details: data.details });
-    }
-
-    res.json({ extracted: data });
+    res.json(data);
   } catch (err) {
-    console.error("❌ Scraping error:", err);
-    res.status(500).json({ error: "Failed to scrape listing", details: err.message });
+    console.error("Scraping error:", err.message);
+    res.status(500).json({ error: 'Failed to scrape data', detail: err.message });
   }
 });
 
-app.listen(3000, () => {
-  console.log("🚀 Kijiji scraper running on port 3000");
+const listener = app.listen(process.env.PORT || 3000, () => {
+  console.log('Scraper API listening on port ' + listener.address().port);
 });
