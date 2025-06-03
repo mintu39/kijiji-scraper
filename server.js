@@ -19,35 +19,33 @@ app.post('/kijiji-ocr', async (req, res) => {
     const screenshotPath = 'kijiji.png';
     await page.screenshot({ path: screenshotPath, fullPage: true });
 
-    await browser.close();
+    // Extract data using selectors instead of OCR where possible
+    const listingData = await page.evaluate(() => {
+      const extractText = (selector) => document.querySelector(selector)?.innerText || null;
+      const extractHref = (selector) => document.querySelector(selector)?.href || null;
 
-    // OCR
-    const result = await Tesseract.recognize(screenshotPath, 'eng', {
-      logger: m => console.log(m),
+      return {
+        title: extractText('h1'),
+        price: extractText('[data-testid="listing-price"]') || extractText('h3'),
+        bedrooms: extractText('[data-testid="bedrooms"]'),
+        bathrooms: extractText('[data-testid="bathrooms"]'),
+        address: extractText('a[href*="Tara-Drive"]'),
+        availableDate: extractText('div:contains("Available")'),
+        phoneNumber: extractText('a[href^="tel:"]'),
+        adId: extractText('div:contains("Ad ID")')?.replace('Ad ID', '').trim(),
+        postedBy: extractText('div:contains("On Kijiji since")')?.split('\n')[0]
+      };
     });
 
-    const rawText = result.data.text;
-    console.log("OCR result:", rawText);
+    await browser.close();
 
-    // Parse values
-    const data = {
-      title: rawText.match(/^[^\n$]+/)?.[0] || null,
-      price: rawText.match(/\$\d{1,3}(,\d{3})*(\.\d{2})?/)?.[0] || null,
-      bedrooms: rawText.match(/\d+\s+Bedrooms?/)?.[0] || null,
-      bathrooms: rawText.match(/\d+\s+Bathrooms?/)?.[0] || null,
-      furnished: rawText.match(/Furnished\s*(Yes|No)/i)?.[0] || null,
-      pets_allowed: rawText.match(/(Pets|Limited Pets)/i)?.[0] || null,
-      parking: rawText.match(/\d+\s+Parking/)?.[0] || null,
-      rental_agreement: rawText.match(/Rental agreement\s+.+/)?.[0] || null,
-    };
-
-    res.json({ extracted: data });
+    res.json({ extracted: listingData });
   } catch (err) {
-    console.error("OCR error:", err);
-    res.status(500).json({ error: "Failed to scrape via OCR", details: err.message });
+    console.error("Scraping error:", err);
+    res.status(500).json({ error: "Failed to scrape listing", details: err.message });
   }
 });
 
 app.listen(3000, () => {
-  console.log("✅ OCR scraper running on port 3000");
+  console.log("✅ Kijiji scraper running on port 3000");
 });
