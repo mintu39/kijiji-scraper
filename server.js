@@ -1,86 +1,85 @@
-// server.js
+// ✅ server.js
+const puppeteer = require('puppeteer');
 const express = require('express');
-const axios = require('axios');
-const cheerio = require('cheerio');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-app.post('/kijiji-listing', async (req, res) => {
+app.post('/kijiji-ocr', async (req, res) => {
   const { url } = req.body;
-
   if (!url || !url.includes('kijiji.ca')) {
-    return res.status(400).json({ error: 'Invalid or missing Kijiji URL' });
+    return res.status(400).json({ error: 'Missing or invalid Kijiji URL' });
   }
 
   try {
-    const response = await axios.get(url);
-    const $ = cheerio.load(response.data);
-    const rawText = $.text();
-
-    const title = $('h1').text().trim();
-    const address = $('a[href*="mapAddress"]').text().trim() || $('span[itemprop="streetAddress"]').text().trim();
-    const priceRaw = $('[data-testid="listing-price"]').text().trim();
-    const price = parseFloat(priceRaw.replace(/[^0-9.]/g, ''));
-
-    // Info map extraction
-    const infoMap = {};
-    $('[data-testid="attribute-label"]').each((i, el) => {
-      const label = $(el).text().trim();
-      const value = $(el).next('[data-testid="attribute-value"]').text().trim();
-      if (label && value) {
-        infoMap[label.toLowerCase()] = value;
-      }
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
     });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1200, height: 900 });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    // Appliances list
-    const appliances = [];
-    $('[data-testid="amenities-list"] li').each((i, el) => {
-      appliances.push($(el).text().trim());
-    });
+    const html = await page.content();
+    const text = await page.evaluate(() => document.body.innerText);
 
-    // Enhanced fields
-    const sqftMatch = rawText.match(/([\d,]+)\s*(sq\s?ft|square feet|sqft)/i);
-    const approximateSqFt = sqftMatch ? parseInt(sqftMatch[1].replace(/,/g, '')) : null;
-
-    const dateMatch = rawText.match(/Available\s+(?:from\s+)?(?:on\s+)?([A-Za-z]+\s+\d{1,2},\s+\d{4})/i);
-    const availableDate = dateMatch ? new Date(dateMatch[1]).toISOString().split('T')[0] : null;
-
-    const adIdMatch = rawText.match(/Ad ID\s*(\d{9,})/i);
-    const adId = adIdMatch ? adIdMatch[1] : null;
-
-    const parkingMatch = rawText.match(/(\d+)\s+Parking Included/i);
-    const parkingIncluded = parkingMatch ? parseInt(parkingMatch[1]) : null;
-
-    let unitType = null;
-    if (/apartment|duplex/i.test(title)) unitType = "Multi Unit - Above Ground";
-
-    const data = {
-      title: title || null,
-      address: address || null,
-      price: isNaN(price) ? null : price,
-      bedrooms: infoMap['bedrooms'] || null,
-      bathrooms: infoMap['bathrooms'] || null,
-      apartment_type: infoMap['apartment type'] || null,
-      furnished: infoMap['furnished']?.toLowerCase() === 'yes',
-      parking_included: parkingIncluded,
-      rental_agreement: infoMap['rental agreement'] || null,
-      appliances,
-      available_date: availableDate,
-      square_footage: approximateSqFt,
-      ad_id: adId,
-      unit_type: unitType
+    const extract = (pattern) => {
+      const match = text.match(pattern);
+      return match ? match[1].trim() : null;
     };
 
-    res.json(data);
+    const includes = (keywords) => keywords.some(k => text.toLowerCase().includes(k));
+
+    const data = {
+      Unit_Type: /\b(\d+\s+bedroom\s+(apartment|duplex|townhome))/i.exec(text)?.[0] || null,
+      Available_Date: extract(/Available\s+(from|on|:)?\s*([A-Z][a-z]+ \d{1,2}, \d{4})/) || null,
+      Approximate_Sq_Ft: extract(/(\d{3,4})\s*(sq\.?\s*ft|square feet)/i),
+      Maximum_Occupants: extract(/(ideal for|maximum)\s+(\d+)/i),
+      Property_Condition: includes(['brand new', 'never lived']) ? 'Brand New' :
+                         includes(['renovated', 'upgraded']) ? 'Moderate' :
+                         includes(['needs work', 'fixer']) ? 'Needs Renovation' : null,
+      Year_Last_Renovated: extract(/renovated in (\d{4})/i),
+      Number_of_Levels_in_Unit: extract(/(duplex|2-storey|triplex|two levels)/i),
+      Unit_Facing: extract(/facing (north|south|east|west)/i),
+      Lawn_and_Snow_Care: includes(['snow removal', 'lawn care']) ? 'Lawn care and snow included' : null,
+      Furnished: includes(['furnished']) ? 'Furnished' : includes(['unfurnished']) ? 'Unfurnished' : null,
+      Basement_Included: includes(['basement access', 'separate basement']) ? 'Yes' : 'No',
+      Basement_Details: extract(/(shared laundry in basement|basement includes[^\.]+)/i),
+      // Utility checkboxes
+      AC_Inclusion: includes(['air conditioning', 'central ac', 'ac provided']),
+      Heat_Inclusion: includes(['heating included', 'heat paid']),
+      Internet_Inclusion: includes(['wifi included', 'internet included']),
+      Cable_Inclusion: includes(['cable included', 'tv included']),
+      Phone_Inclusion: includes(['phone line included', 'landline']),
+      // Feature checkboxes
+      Corner_Unit: includes(['corner unit']),
+      Central_Vacuum: includes(['central vacuum']),
+      Penthouse: includes(['penthouse', 'top floor']),
+      Natural_Sunlight: includes(['natural light', 'sunlight', 'bright']),
+      Fireplace_Common_Area: includes(['fireplace', 'living room fireplace']),
+      Fireplace_Bedroom: includes(['fireplace in bedroom']),
+      Upgraded_Bathrooms: includes(['upgraded bathroom', 'modern bath']),
+      Backsplash_Kitchen: includes(['backsplash', 'tile wall']),
+      Upgraded_Kitchen: includes(['renovated kitchen', 'modern kitchen']),
+      Dishwasher_Included: includes(['dishwasher included', 'built-in dishwasher']),
+      // Address block (rough)
+      Street_Address: extract(/\d+\s+[^,]+/),
+      City: extract(/\b(City of )?(Toronto|Mississauga|Ottawa|Etobicoke)\b/),
+      Province: 'Ontario',
+      Country: 'Canada'
+    };
+
+    await browser.close();
+    res.json({ extracted: data });
+
   } catch (err) {
-    console.error("Scraping error:", err.message);
-    res.status(500).json({ error: 'Failed to scrape data', detail: err.message });
+    console.error("Scraping error:", err);
+    res.status(500).json({ error: 'Failed to scrape listing', details: err.message });
   }
 });
 
-const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log('Scraper API listening on port ' + listener.address().port);
+app.listen(3000, () => {
+  console.log("🚀 Kijiji scraper running on port 3000");
 });
