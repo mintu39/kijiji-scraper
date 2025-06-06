@@ -1,4 +1,4 @@
-// ✅ server.js
+// ✅ server.js (with console logs for debugging)
 const puppeteer = require('puppeteer');
 const express = require('express');
 const cors = require('cors');
@@ -9,7 +9,10 @@ app.use(express.json());
 
 app.post('/kijiji-ocr', async (req, res) => {
   const { url } = req.body;
+  console.log("🔍 Received URL:", url);
+
   if (!url || !url.includes('kijiji.ca')) {
+    console.log("❌ Invalid or missing URL");
     return res.status(400).json({ error: 'Missing or invalid Kijiji URL' });
   }
 
@@ -71,11 +74,12 @@ app.post('/kijiji-ocr', async (req, res) => {
       Country: 'Canada'
     };
 
+    console.log("✅ Extracted Data:", data);
     await browser.close();
     res.json({ extracted: data });
 
   } catch (err) {
-    console.error("Scraping error:", err);
+    console.error("❌ Scraping error:", err);
     res.status(500).json({ error: 'Failed to scrape listing', details: err.message });
   }
 });
