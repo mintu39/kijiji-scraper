@@ -53,6 +53,9 @@ app.post('/kijiji-listing', async (req, res) => {
       appliances: appliances,
     };
 
+    // Log the scraped data
+    console.log("Scraped Data:", data);
+
     res.json(data);
   } catch (err) {
     console.error("Scraping error:", err.message);
