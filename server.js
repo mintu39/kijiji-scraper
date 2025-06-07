@@ -18,21 +18,39 @@ app.post('/kijiji-listing', async (req, res) => {
     const response = await axios.get(url);
     const $ = cheerio.load(response.data);
 
+    const title = $('h1').text().trim();
+    const address = $('a[href*="mapAddress"]').text().trim() || $('span[itemprop="streetAddress"]').text().trim();
+    const priceRaw = $('[data-testid="listing-price"]').text().trim();
+    const price = parseFloat(priceRaw.replace(/[^0-9.]/g, ''));
+
+    // Dynamic Info Mapping
+    const infoMap = {};
+    $('[data-testid="attribute-label"]').each((i, el) => {
+      const label = $(el).text().trim();
+      const value = $(el).next('[data-testid="attribute-value"]').text().trim();
+      if (label && value) {
+        infoMap[label.toLowerCase()] = value;
+      }
+    });
+
+    const appliances = [];
+    $('[data-testid="amenities-list"] li').each((i, el) => {
+      appliances.push($(el).text().trim());
+    });
+
     const data = {
-      title: $('h1').text().trim(),
-      address: $('span[itemprop="streetAddress"]').text().trim() || 'N/A',
-      price: 2330, // Optional: Scrape dynamically if available
-      bedrooms: 1,
-      bathrooms: 1,
-      apartment_type: "Apartment",
-      furnished: false,
-      parking_included: 0,
-      pets_allowed: "Limited Pets",
-      rental_agreement: "1 Year lease",
-      utilities: "Heat Included",
-      appliances: ["Laundry (In Unit)", "Dishwasher", "Fridge / Freezer"],
-      smoking: "Outdoors only",
-      building_amenities: ["Elevator in Building", "Storage Space"]
+      title: title || null,
+      address: address || null,
+      price: isNaN(price) ? null : price,
+      bedrooms: infoMap['bedrooms'] || null,
+      bathrooms: infoMap['bathrooms'] || null,
+      apartment_type: infoMap['apartment type'] || null,
+      furnished: infoMap['furnished']?.toLowerCase() === 'yes',
+      parking_included: infoMap['parking included'] || "Not Available",
+      pets_allowed: infoMap['pets'] || null,
+      rental_agreement: infoMap['rental agreement'] || null,
+      smoking: infoMap['smoking'] || null,
+      appliances: appliances,
     };
 
     res.json(data);
@@ -43,5 +61,5 @@ app.post('/kijiji-listing', async (req, res) => {
 });
 
 const listener = app.listen(process.env.PORT || 3000, () => {
-  console.log('App is running on port ' + listener.address().port);
+  console.log('Scraper API listening on port ' + listener.address().port);
 });
